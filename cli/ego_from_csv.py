@@ -1,0 +1,472 @@
+# -*- coding: utf-8 -*-
+"""7.4 ego graphs: render one ego-network figure per corruption in a CSV.
+
+Reads a CSV produced by gen_corruptions_csv.py and draws, for each row, the
+2-hop neighbourhoods of the head and the tail with the changed edge on top --
+so the figure shows whether the picked candidate sits inside the anchor's
+neighbourhood or outside it entirely. The dataset graph is loaded ONCE and
+reused across rows.
+
+The CSV column names are FROZEN. Here the corr_* prefix means CORRUPTED -- in
+the trainer log, by contrast, corr-pick means "corroborated".
+
+By default renders the clearest exemplars first (tail-slot, zero shared
+neighbours, moderate anchor degree so the graph stays legible), capped by
+--limit.
+
+Reading a figure:
+    green solid   the true edge                 blue node   head
+    red dashed    the corrupted edge            green node  true tail
+    grey nodes    1-hop (darker) / 2-hop        red node    picked candidate
+
+Run from repo root (pytorch env):
+  PYTHONPATH=experiments python experiments/kgsage/cli/ego_from_csv.py \
+      --csv experiments/kgsage/outputs/eval/fb_corruptions.csv \
+      --data data/FB15K-237 --out_dir experiments/kgsage/outputs/eval/ego --limit 6
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import math
+import random
+import re
+import sys
+from collections import defaultdict, deque
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import networkx as nx  # noqa: E402
+
+# Each eval script writes into its own subfolder under outputs/eval/, resolved
+# relative to this file so the location is correct regardless of cwd.
+_EVAL_ROOT = Path(__file__).resolve().parents[1] / "outputs" / "eval"
+
+# --- palette (matches the KGSAGE figures) ---
+C_HEAD = "#6c8ebf"
+C_TAIL = "#82b366"
+C_CORR = "#b85450"
+C_HOP1 = "#c9c9c9"
+C_HOP2 = "#ebebeb"
+C_EDGE = "#d0d0d0"
+C_TRUE_EDGE = "#2d7a2d"
+C_CORR_EDGE = "#c0392b"
+
+
+# --------------------------------------------------------------------------
+# graph helpers (loaded once, reused for every row)
+# --------------------------------------------------------------------------
+
+def _clean(name: str) -> str:
+    """Same label cleaning gen_corruptions_csv applies, so CSV names resolve."""
+    name = re.sub(r"-GB\b", "", name)
+    name = re.sub(r"\bLanguage\b", "", name).strip()
+    return re.sub(r"\s{2,}", " ", name)
+
+
+def _read_text_map(path: Path) -> dict:
+    """id -> readable name (entity2text.txt / relation2text.txt: 'id<TAB>text')."""
+    m = {}
+    if not path.exists():
+        return m
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 2:
+                m[parts[0]] = parts[1]
+    return m
+
+
+def _load_triples(data_dir: Path) -> list:
+    """All (h, r, t) across train/valid/test -- the full graph the KG describes."""
+    triples = []
+    for split in ("train", "valid", "test"):
+        p = data_dir / f"{split}.txt"
+        if not p.exists():
+            continue
+        with open(p, encoding="utf-8-sig") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) == 3:
+                    triples.append(tuple(parts))
+    return triples
+
+
+def _build_adjacency(triples) -> dict:
+    """node -> list of (neighbour, relation, outgoing?). Undirected for traversal,
+    but each entry remembers the true direction so edges are drawn correctly."""
+    adj = {}
+    for h, r, t in triples:
+        adj.setdefault(h, []).append((t, r, True))
+        adj.setdefault(t, []).append((h, r, False))
+    return adj
+
+
+def _ego(adj, center, hops, max_neighbors, rng, always_keep=()):
+    """BFS out to `hops` from `center`, capping expansion per node. Returns
+    (hop_of_node, edges); `always_keep` nodes are never dropped by the cap."""
+    hop = {center: 0}
+    edges = []
+    q = deque([center])
+    while q:
+        node = q.popleft()
+        d = hop[node]
+        if d >= hops:
+            continue
+        nbrs = adj.get(node, [])
+        if len(nbrs) > max_neighbors:
+            keep = [x for x in nbrs if x[0] in always_keep]
+            rest = [x for x in nbrs if x[0] not in always_keep]
+            rng.shuffle(rest)
+            nbrs = keep + rest[:max(0, max_neighbors - len(keep))]
+        for nbr, rel, outgoing in nbrs:
+            edges.append((node, nbr, rel) if outgoing else (nbr, node, rel))
+            if nbr not in hop:
+                hop[nbr] = d + 1
+                q.append(nbr)
+    return hop, edges
+
+
+def _short(text: str, n: int = 26) -> str:
+    text = text.strip()
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def _structured_layout(G, head, tail, picked_candidate):
+    """Pin the three focus nodes far apart, assign every other node to its
+    nearest focus node, and fan it onto an arc pointing away from the middle --
+    so the true edge and the corrupted edge always run through open space."""
+    # "pinned" is a layout concept (the three big nodes), not the glossary's
+    # anchor -- the anchor is whichever of them keeps its slot in the triple.
+    pinned = {head: (-4.0, 0.4), tail: (4.0, 2.2)}
+    if picked_candidate and picked_candidate not in pinned:
+        pinned[picked_candidate] = (4.0, -2.6)
+    sector = {head: (100.0, 260.0), tail: (-40.0, 120.0)}
+    if picked_candidate in pinned:
+        sector[picked_candidate] = (-120.0, 40.0)
+
+    U = G.to_undirected(as_view=True)
+    dist = {a: nx.single_source_shortest_path_length(U, a) for a in pinned}
+
+    buckets = {}
+    for n in G.nodes():
+        if n in pinned:
+            continue
+        best_a, best_d = None, 10**9
+        for a in pinned:
+            d = dist[a].get(n, 10**9)
+            if d < best_d:
+                best_a, best_d = a, d
+        if best_a is None or best_d >= 10**9:
+            best_a, best_d = head, 3
+        buckets.setdefault(best_a, {}).setdefault(best_d, []).append(n)
+
+    pos = dict(pinned)
+    for a, byhop in buckets.items():
+        a0, a1 = sector.get(a, (0.0, 360.0))
+        for d, nodes in sorted(byhop.items()):
+            nodes = sorted(nodes)
+            r = 1.5 + 1.35 * (d - 1)
+            for i, n in enumerate(nodes):
+                frac = (i + 0.5) / len(nodes)
+                ang = math.radians(a0 + (a1 - a0) * frac)
+                pos[n] = (pinned[a][0] + r * math.cos(ang),
+                          pinned[a][1] + r * math.sin(ang))
+    return pos
+
+
+def render_ego(adj, ent_txt, rel_txt, true_triple, corruption, out, *, hops=2,
+               candidate_hops=1, max_neighbors=6, label_hops=1,
+               edge_labels=False, short_relations=False, layout="structured",
+               seed=0, figsize=(14, 9)):
+    """Draw ONE corruption's ego figure. `adj`/`ent_txt`/`rel_txt` are the
+    once-loaded graph + text maps. `true_triple`/`corruption` are (h, r, t)
+    string triples.
+    Returns a stats dict (or None if the triple could not be drawn)."""
+    rng = random.Random(seed)
+    name = lambda e: _short(ent_txt.get(e, e))
+
+    def rname(r):
+        if short_relations:
+            return _short(r.rstrip("/").split("/")[-1] or r, 24)
+        return _short(rel_txt.get(r, r), 34)
+
+    true_head, true_rel, true_tail = true_triple
+    corr_head, corr_rel, corr_tail = corruption
+    changed = [s for s, (a, b) in
+               zip(("head", "relation", "tail"),
+                   zip(true_triple, corruption)) if a != b]
+    if not changed:
+        return None
+    slot = changed[0]
+    # The picked candidate is the entity the generator put in the changed slot.
+    picked_candidate = (corr_head if slot == "head"
+                        else (corr_tail if slot == "tail" else None))
+    if true_head not in adj or true_tail not in adj:
+        return None
+
+    keep = {true_head, true_tail} | ({picked_candidate} if picked_candidate else set())
+    hop_h, edges_h = _ego(adj, true_head, hops, max_neighbors, rng, keep)
+    hop_t, edges_t = _ego(adj, true_tail, hops, max_neighbors, rng, keep)
+
+    candidate_hop = (min(hop_h.get(picked_candidate, 99),
+                         hop_t.get(picked_candidate, 99))
+                     if picked_candidate else 99)
+    candidate_in_ego = candidate_hop < 99
+
+    hop_c, edges_c = {}, []
+    if picked_candidate and candidate_hops > 0:
+        hop_c, edges_c = _ego(adj, picked_candidate, candidate_hops,
+                              max_neighbors, rng, keep)
+
+    hop = dict(hop_t)
+    for src in (hop_h, hop_c):
+        for n, d in src.items():
+            hop[n] = min(d, hop.get(n, 99))
+
+    G = nx.DiGraph()
+    for n, d in hop.items():
+        G.add_node(n, hop=d)
+    for s, d, r in edges_h + edges_t + edges_c:
+        if s in hop and d in hop:
+            G.add_edge(s, d, rel=r)
+    if picked_candidate and picked_candidate not in G:
+        G.add_node(picked_candidate, hop=99)
+    G.add_edge(corr_head, corr_tail, rel=corr_rel)
+    G.add_edge(true_head, true_tail, rel=true_rel)
+
+    if layout == "spring":
+        init = {true_head: (-1.0, 0.0), true_tail: (1.0, 0.0)}
+        if picked_candidate and picked_candidate not in init:
+            init[picked_candidate] = (1.0, -1.1)
+        pos = nx.spring_layout(G, pos=init, fixed=list(init), seed=seed,
+                               k=0.55, iterations=200)
+    else:
+        pos = _structured_layout(G, true_head, true_tail, picked_candidate)
+
+    w, h = figsize
+    fig, ax = plt.subplots(figsize=(w, h))
+    ax.axis("off")
+
+    true_edge, corr_edge = (true_head, true_tail), (corr_head, corr_tail)
+    plain = [e for e in G.edges() if e not in (true_edge, corr_edge)]
+    nx.draw_networkx_edges(G, pos, edgelist=plain, edge_color=C_EDGE,
+                           width=1.0, arrows=False, ax=ax)
+    nx.draw_networkx_edges(G, pos, edgelist=[true_edge], edge_color=C_TRUE_EDGE,
+                           width=3.0, arrows=True, arrowsize=20, min_source_margin=18,
+                           min_target_margin=18, connectionstyle="arc3,rad=0.06", ax=ax)
+    nx.draw_networkx_edges(G, pos, edgelist=[corr_edge], edge_color=C_CORR_EDGE,
+                           width=3.0, style="dashed", arrows=True, arrowsize=20,
+                           min_source_margin=18, min_target_margin=18,
+                           connectionstyle="arc3,rad=0.16", ax=ax)
+
+    def draw(nodes, color, size, edge="#888888", lw=1.0):
+        nodes = [n for n in nodes if n in G]
+        if nodes:
+            nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color=color,
+                                   node_size=size, edgecolors=edge, linewidths=lw, ax=ax)
+
+    # The three big nodes of the figure: head, true tail, picked candidate.
+    focus_nodes = {true_head, true_tail} | ({picked_candidate} if picked_candidate else set())
+    draw([n for n, d in hop.items() if d >= 2 and n not in focus_nodes], C_HOP2, 240)
+    draw([n for n, d in hop.items() if d == 1 and n not in focus_nodes], C_HOP1, 340)
+    draw([true_head], C_HEAD, 1100, "#31506f", 2.0)
+    draw([true_tail], C_TAIL, 1100, "#4a7a3a", 2.0)
+    if picked_candidate:
+        draw([picked_candidate], C_CORR, 1100, "#7d2f28", 2.0)
+
+    lab_nodes = (list(G.nodes()) if label_hops < 0
+                 else [n for n in G.nodes() if hop.get(n, 99) <= label_hops])
+    for n in set(lab_nodes) | focus_nodes:
+        if n not in pos:
+            continue
+        big = n in focus_nodes
+        ax.text(pos[n][0], pos[n][1] - (0.30 if big else 0.20), name(n),
+                ha="center", va="top", fontsize=8.0 if big else 6.8,
+                fontweight="bold" if big else "normal", zorder=5,
+                bbox=dict(fc="white", ec="none", alpha=0.75, pad=0.8))
+
+    key = {true_edge: rname(true_rel)}
+    if corr_edge != true_edge:
+        key[corr_edge] = rname(corr_rel)
+    if edge_labels:
+        key = {(s, d): rname(a["rel"]) for s, d, a in G.edges(data=True)}
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=key, font_size=6.5,
+                                 bbox=dict(fc="white", ec="none", alpha=0.75), ax=ax)
+
+    where = (("inside the neighbourhood (hop %d)" % hop[picked_candidate]
+              if candidate_in_ego
+              else "OUTSIDE the %d-hop neighbourhood" % hops)
+             if picked_candidate else "n/a")
+    ax.set_title(
+        f"{slot} corrupted:  {name(true_head)} —[{rname(true_rel)}]→ {name(true_tail)}\n"
+        f"picked candidate: {name(picked_candidate) if picked_candidate else '-'}"
+        f"  ·  {where}"
+        f"   |   {G.number_of_nodes()} nodes, {hops}-hop ego of head+tail"
+        f" (≤{max_neighbors} nbrs/node)",
+        fontsize=10)
+
+    handles = [
+        plt.Line2D([], [], color=C_TRUE_EDGE, lw=2.8, label="true edge"),
+        plt.Line2D([], [], color=C_CORR_EDGE, lw=2.8, ls="--", label="corrupted edge"),
+        plt.Line2D([], [], marker="o", ls="", mfc=C_HEAD, mec="#31506f", ms=10, label="head"),
+        plt.Line2D([], [], marker="o", ls="", mfc=C_TAIL, mec="#4a7a3a", ms=10, label="true tail"),
+        plt.Line2D([], [], marker="o", ls="", mfc=C_CORR, mec="#7d2f28", ms=10, label="picked candidate"),
+        plt.Line2D([], [], marker="o", ls="", mfc=C_HOP1, mec="#888", ms=8, label="1-hop"),
+        plt.Line2D([], [], marker="o", ls="", mfc=C_HOP2, mec="#888", ms=7, label="2-hop"),
+    ]
+    ax.legend(handles=handles, loc="lower left", fontsize=8, framealpha=0.9)
+
+    out = Path(out)
+    if out.parent and str(out.parent) != "":
+        out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+    # Both counts are taken from the head, so the figure caption can contrast
+    # "how connected the true tail is" with "how connected the picked candidate is".
+    nb = lambda e: {x[0] for x in adj.get(e, [])}
+    shared_with_true_tail = len(nb(true_head) & nb(true_tail)) if picked_candidate else 0
+    shared_with_candidate = len(nb(true_head) & nb(picked_candidate)) if picked_candidate else 0
+    return {"slot": slot, "candidate_in_ego": candidate_in_ego,
+            "shared_with_true_tail": shared_with_true_tail,
+            "shared_with_candidate": shared_with_candidate,
+            "nodes": G.number_of_nodes(), "edges": G.number_of_edges()}
+
+
+# --------------------------------------------------------------------------
+# CSV driver
+# --------------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", required=True)
+    ap.add_argument("--data", required=True)
+    ap.add_argument("--out_dir", default=None,
+                    help="output dir for the PNGs; default: outputs/eval/ego_graphs/")
+    ap.add_argument("--limit", type=int, default=6,
+                    help="max ego graphs to render (0 = all rows)")
+    ap.add_argument("--all_rows", action="store_true",
+                    help="render every row in file order instead of ranking exemplars")
+    ap.add_argument("--deg_min", type=int, default=6)
+    ap.add_argument("--deg_max", type=int, default=45)
+    ap.add_argument("--ext", default="png", choices=["png", "pdf"])
+    ap.add_argument("--hops", type=int, default=2)
+    ap.add_argument("--max_neighbors", type=int, default=6)
+    ap.add_argument("--entity2text", default=None)
+    ap.add_argument("--relation2text", default=None)
+    ap.add_argument("--edge_labels", action="store_true", default=True)
+    ap.add_argument("--short_relations", action="store_true", default=True)
+    args = ap.parse_args()
+
+    data = Path(args.data)
+    ent_txt = _read_text_map(Path(args.entity2text) if args.entity2text
+                             else data / "entity2text.txt")
+    rel_txt = _read_text_map(Path(args.relation2text) if args.relation2text
+                             else data / "relation2text.txt")
+
+    triples = _load_triples(data)
+    if not triples:
+        print(f"!! no triples under {data}", file=sys.stderr)
+        return 2
+    adj = _build_adjacency(triples)          # built ONCE, reused for every row
+
+    # The CSV holds only readable triples. Resolve names -> graph ids by matching
+    # against the real graph (which disambiguates any repeated display name), and
+    # recompute the ranking metrics here.
+    triple_set = set(triples)
+    name2ids = defaultdict(set)              # readable name (raw + cleaned) -> ids
+    for e, txt in ent_txt.items():
+        name2ids[txt].add(e)
+        name2ids[_clean(txt)].add(e)         # the form gen_corruptions_csv writes
+    for e in adj:                            # ids with no text map resolve to themselves
+        name2ids.setdefault(e, set()).add(e)
+    label2rels = defaultdict(set)            # readable relation -> paths
+    all_rels = {r for _, r, _ in triples}
+    for rp in all_rels:
+        label2rels[rp].add(rp)
+        label2rels[rp.rstrip("/").split("/")[-1]].add(rp)
+        if rp in rel_txt:
+            label2rels[rel_txt[rp]].add(rp)
+    head_pool, tail_pool = defaultdict(set), defaultdict(set)
+    for h, r, t in triples:
+        head_pool[r].add(h); tail_pool[r].add(t)
+
+    def resolve(o_head, o_rel, o_tail, c_head, c_rel, c_tail):
+        """(true readable, corrupted readable) -> (true ids, corrupted ids) or None."""
+        rels = label2rels.get(o_rel, set())
+        # the true triple is a real edge -> the (h, r, t) that exists pins everything
+        for r in rels:
+            for h in name2ids.get(o_head, ()):
+                for t in name2ids.get(o_tail, ()):
+                    if (h, r, t) in triple_set:
+                        # the corruption changes exactly one slot
+                        if c_head != o_head:          # head corrupted
+                            for nh in _prefer(name2ids.get(c_head, ()), head_pool[r]):
+                                return (h, r, t), (nh, r, t)
+                        else:                          # tail corrupted
+                            for nt in _prefer(name2ids.get(c_tail, ()), tail_pool[r]):
+                                return (h, r, t), (h, r, nt)
+        return None
+
+    csv_rows = list(csv.DictReader(open(args.csv, encoding="utf-8-sig")))
+    resolved = []
+    for r in csv_rows:
+        got = resolve(r["orig_head"], r["orig_relation"], r["orig_tail"],
+                      r["corr_head"], r["corr_relation"], r["corr_tail"])
+        if got is None:
+            continue
+        (h, rp, t), (ch, cr, ct) = got
+        slot = "head" if ch != h else "tail"
+        # anchor = the entity that keeps its slot; the picked candidate took the other.
+        anchor, picked_candidate = (h, ct) if slot == "tail" else (t, ch)
+        nb = lambda e: {x[0] for x in adj.get(e, [])}
+        resolved.append({
+            "true_triple": (h, rp, t), "corruption": (ch, cr, ct), "slot": slot,
+            "shared": len(nb(anchor) & nb(picked_candidate)),
+            "direct": picked_candidate in nb(anchor),
+            "degree": len(adj.get(anchor, [])),
+            "rel_seg": rp.rstrip("/").split("/")[-1],
+            "label": f"({r['corr_head']}, {r['corr_relation']}, {r['corr_tail']})",
+        })
+
+    if not args.all_rows:
+        resolved.sort(key=lambda x: (x["slot"] != "tail", not (x["shared"] == 0 and not x["direct"]),
+                                     not (args.deg_min <= x["degree"] <= args.deg_max), x["degree"]))
+    if args.limit:
+        resolved = resolved[:args.limit]
+
+    out_dir = Path(args.out_dir) if args.out_dir else (_EVAL_ROOT / "ego_graphs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ok = 0
+    for i, x in enumerate(resolved):
+        out = out_dir / f"ego_{i}_{x['rel_seg']}.{args.ext}"
+        stats = render_ego(adj, ent_txt, rel_txt, x["true_triple"], x["corruption"], out,
+                           hops=args.hops, max_neighbors=args.max_neighbors,
+                           edge_labels=args.edge_labels, short_relations=args.short_relations)
+        if stats is None:
+            print(f"SKIP {x['label']}: could not draw", file=sys.stderr)
+            continue
+        ok += 1
+        print(f"OK  {out}   {x['label']}   "
+              f"[shared true_tail={stats['shared_with_true_tail']} "
+              f"candidate={stats['shared_with_candidate']}]")
+
+    print(f"\nrendered {ok}/{len(resolved)} ego graphs "
+          f"({len(csv_rows) - len(resolved) if not args.limit else '...'} "
+          f"unresolved) -> {out_dir}")
+    return 0
+
+
+def _prefer(candidates, pool):
+    """Return candidate ids, those observed in the relation's type pool first."""
+    candidates = list(candidates)
+    inpool = [c for c in candidates if c in pool]
+    return inpool + [c for c in candidates if c not in pool]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
