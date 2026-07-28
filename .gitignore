@@ -5,7 +5,8 @@ outputs/
 *.pt
 *.pth
 
-# Datasets (drop them in data/<NAME>/, keep them out of git)
+# Datasets live in data/<NAME>/ — keep the big ones out of git.
+# (data/README.md and the tiny data/dummy_kg/ fixture ARE tracked.)
 data/FB15K-237/
 data/FB15K-mini/
 data/WN18RR/

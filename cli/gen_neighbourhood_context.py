@@ -19,9 +19,9 @@ the ids and disambiguates repeated display names. When assessing the true triple
 is by corroboration, not tautology.
 
 Run from repo root (pytorch env not needed -- pure graph/text):
-  PYTHONPATH=experiments python experiments/kgsage/cli/gen_neighbourhood_context.py \
-      --csv experiments/kgsage/outputs/eval/gen_corruptions/FB15K-237_test_corruptions.csv \
-      --data data/FB15K-237
+  python -m kgsage.cli.gen_neighbourhood_context \
+      --csv kgsage/outputs/eval/gen_corruptions/FB15K-237_test_corruptions.csv \
+      --data kgsage/data/FB15K-237
 """
 from __future__ import annotations
 import argparse

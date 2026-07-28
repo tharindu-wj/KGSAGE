@@ -16,25 +16,23 @@ true triple each corruption was derived from.
 The CSV carries readable labels for both triples, so no consumer needs the
 checkpoint again.
 
-Run from repo root (pytorch env):
-  PYTHONPATH=experiments python experiments/kgsage/cli/gen_corruptions_csv.py \
-      --ckpt experiments/kgsage/outputs/checkpoints/archived/generator_fb15k237.pt \
-      --data data/FB15K-237 --split test --per_rel 4 --seed 7 \
-      --out experiments/kgsage/outputs/eval/fb_corruptions.csv
+Run from the directory that contains `kgsage/` (pytorch env):
+  python -m kgsage.cli.gen_corruptions_csv \
+      --ckpt kgsage/outputs/checkpoints/archived/generator_fb15k237.pt \
+      --data kgsage/data/FB15K-237 --split test --per_rel 4 --seed 7 \
+      --out kgsage/outputs/eval/fb_corruptions.csv
 """
 from __future__ import annotations
 import argparse
 import csv
 import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 
-sys.path.insert(0, "experiments")
-from kgsage.corruption_generation import load_checkpoint, generate_negatives  # noqa: E402
+from kgsage.corruption_generation import load_checkpoint, generate_negatives
 
 # Each eval script writes into its own subfolder under outputs/eval/, resolved
 # relative to this file so the location is correct regardless of cwd.

@@ -6,9 +6,11 @@
 # warm-up runs on CPU (fine for small KGs -- YAGO/WN warm up in minutes on a
 # CPU node).
 #
-#   CPU_PARTITION=<name> DATASET=fb15k237 sbatch experiments/kgsage/slurm/train_cpu.slurm
-#   CPU_PARTITION=<name> DATASET=wn18rr   sbatch experiments/kgsage/slurm/train_cpu.slurm
-#   CPU_PARTITION=<name> DATASET=yago45   sbatch experiments/kgsage/slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=fb15k237 sbatch kgsage/slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=wn18rr   sbatch kgsage/slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=yago45   sbatch kgsage/slurm/train_cpu.slurm
+#
+# PROJECT_DIR must point at the directory that CONTAINS kgsage/ (see train.slurm).
 #
 # !! Set CPU_PARTITION to a real non-GPU partition -- run `sinfo -s` to list them
 #    (Flinders DeepThought commonly has a 'general'/'hpc' CPU partition).
@@ -26,20 +28,21 @@
 #SBATCH --account=cse
 # NOTE: --partition is set from $CPU_PARTITION below via `scontrol`-free re-exec
 #       is not possible; instead pass it at submit time:
-#         sbatch --partition="$CPU_PARTITION" experiments/kgsage/slurm/train_cpu.slurm
+#         sbatch --partition="$CPU_PARTITION" kgsage/slurm/train_cpu.slurm
 #       (SBATCH directives can't read env vars, so the partition MUST be on the
 #        sbatch command line.)
 
 set -eo pipefail
 
-PROJECT_DIR="$HOME/ADKGD"
-CONDA_ENV="$HOME/envs/adkgd"
+# The directory that CONTAINS kgsage/ -- override for your own checkout.
+PROJECT_DIR="${PROJECT_DIR:-$HOME/kgsage-project}"
+CONDA_ENV="${CONDA_ENV:-$HOME/envs/kgsage}"
 
 DATASET="${DATASET:-fb15k237}"
 case "$DATASET" in
-  fb15k237) DATA_DIR="data/FB15K-237"; TAG="fb15k237" ;;
-  wn18rr)   DATA_DIR="data/WN18RR";    TAG="wn18rr"   ;;
-  yago45)   DATA_DIR="data/YAGO4.5";   TAG="yago45"   ;;
+  fb15k237) DATA_DIR="kgsage/data/FB15K-237"; TAG="fb15k237" ;;
+  wn18rr)   DATA_DIR="kgsage/data/WN18RR";    TAG="wn18rr"   ;;
+  yago45)   DATA_DIR="kgsage/data/YAGO4.5";   TAG="yago45"   ;;
   *) echo "ERROR: DATASET must be fb15k237, wn18rr or yago45 (got '$DATASET')" >&2; exit 1 ;;
 esac
 
@@ -50,8 +53,8 @@ esac
 SEED="${SEED:-0}"
 EPOCHS="${EPOCHS:-8}"
 SNAPSHOT_EVERY="${SNAPSHOT_EVERY:-1}"
-CKPT_PATH="${CKPT_PATH:-experiments/kgsage/outputs/checkpoints/run_${TAG}_s${SEED}.pt}"
-INIT_E="${INIT_E:-experiments/kgsage/outputs/checkpoints/kgsage_${TAG}_s${SEED}.pt}"
+CKPT_PATH="${CKPT_PATH:-kgsage/outputs/checkpoints/run_${TAG}_s${SEED}.pt}"
+INIT_E="${INIT_E:-kgsage/outputs/checkpoints/kgsage_${TAG}_s${SEED}.pt}"
 
 # Use the E'-donor to skip the Phase-1 warm-up if it exists; else warm up on CPU.
 INIT_ARGS=()
@@ -81,7 +84,7 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export PYTHONUNBUFFERED=1
 cd "$PROJECT_DIR"
-export PYTHONPATH="$PROJECT_DIR/experiments:$PYTHONPATH"
+export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 mkdir -p "$(dirname "$CKPT_PATH")"
 
 $PY -m kgsage.gan.train \

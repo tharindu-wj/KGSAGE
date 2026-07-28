@@ -1,10 +1,11 @@
 """KGSAGE — Knowledge Graph Semantic Anomaly Generator.
 
-A standalone-ready Python package for generating knowledge-graph CORRUPTIONS
+A standalone Python package for generating knowledge-graph CORRUPTIONS
 — false triples built from real ones — used to train and evaluate per-triple
-anomaly detectors such as ADKGD. Inside this package the emitted object is
-always a "corruption"; only the bridge re-labels it a detector-side
-"negative" (training) or "anomaly" (evaluation).
+anomaly detectors. Inside this package the emitted object is always a
+"corruption"; the detector side is what re-labels it a "negative" (training)
+or an "anomaly" (evaluation). That seam is deliberate — it is why the
+generation entry point is called `generate_negatives`.
 
 The dual-discriminator architecture takes a real triple and produces a
 false-but-plausible one: exactly one ENTITY slot (head or tail) is corrupted;
@@ -12,9 +13,9 @@ the relation is never corrupted (see kgsage/corruption_generation.py,
 STEP 2). The adversarial training stack lives in `kgsage.gan` — read that
 folder name as "the adversarial training stack": it holds the neighbourhood
 context encoder, the membership sketches, the candidate sampler and BOTH
-discriminators, not just the GAN loop. Downstream-detector integration (e.g.
-the ADKGD bridge that calls KGSAGE from a detector's training pipeline) lives
-in `experiments/kgsage_bridge/`, keeping `kgsage/` detector-agnostic.
+discriminators, not just the GAN loop. Nothing here imports or knows about any
+particular detector: integration is the caller's thin glue over the public API
+below, which keeps this package detector-agnostic.
 
 Public API (stable across versions; suitable for the future pip release):
   load_kg(path)                - load a KG from a TSV directory
@@ -23,7 +24,7 @@ Public API (stable across versions; suitable for the future pip release):
   CandidateScoringGenerator    - the generator G (scores candidates; conditioned
                                  on the context table E' + membership sketches)
   generate_negatives           - Phase 3: one corruption per input triple
-                                 (frozen name; the bridge re-exports it)
+                                 (frozen detector-facing name; see above)
   load_checkpoint              - load a trained checkpoint for generation
 
 The torch-backed symbols are lazy-loaded: `import kgsage` works without torch
@@ -35,8 +36,8 @@ See README.md for the run order and dataset extension story.
 __version__ = "0.1.0"
 
 # Eager — pure-Python, no torch.
-from kgsage.data.loaders import load_kg
-from kgsage.data.datasets import resolve_dataset, KNOWN_DATASETS
+from kgsage.preprocessing.loaders import load_kg
+from kgsage.preprocessing.registry import resolve_dataset, KNOWN_DATASETS
 
 # Lazy — defer heavy imports (torch) until a model symbol or generation helper
 # is actually accessed. Lets `import kgsage` succeed without torch installed.

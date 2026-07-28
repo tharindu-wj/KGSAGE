@@ -2,11 +2,13 @@
 
 Verifies the package structure on a developer machine that has torch installed.
 This test imports ONLY `kgsage.*` — proving the package is independently usable.
-The bridge end-to-end check (which imports the sibling `kgsage_bridge` glue)
-lives in `experiments/kgsage_bridge/smoke_test.py` to keep this file coupling-free.
+Keep it that way: any end-to-end check that needs a downstream detector belongs
+in that detector's own repo, not here.
 
-Run from repo root:
-    PYTHONPATH=experiments python experiments/kgsage/smoke_test.py
+Run from the directory that CONTAINS `kgsage/` — the registry's dataset paths
+are relative to it. Use -m: running the file by path would put `kgsage/` itself
+on sys.path instead of its parent, and `import kgsage` would fail.
+    python -m kgsage.smoke_test
 
 Sections:
   1. Imports (kgsage.* only)
@@ -40,9 +42,9 @@ def main():
     print("OK: eager public API (load_kg, resolve_dataset, KNOWN_DATASETS)")
     print(f"    KNOWN_DATASETS: {sorted(KNOWN_DATASETS.keys())}")
 
-    from kgsage.data.loaders import load_kg as _load_kg2
-    from kgsage.data.datasets import resolve_dataset as _resolve2
-    print("OK: kgsage.data.* sub-package imports")
+    from kgsage.preprocessing.loaders import load_kg as _load_kg2
+    from kgsage.preprocessing.registry import resolve_dataset as _resolve2
+    print("OK: kgsage.preprocessing.* sub-package imports")
 
     # ---- SECTION 2: Behaviour ----
     section("SECTION 2: Behaviour checks")
@@ -59,8 +61,11 @@ def main():
     except ValueError:
         print("OK: resolve_dataset rejects unknown name")
 
-    if os.path.isdir("data/dummy_kg"):
-        cfg = resolve_dataset("data/dummy_kg")
+    # Exercise the path branch too, but source the path from the registry so
+    # this stays correct if the dataset root ever moves again.
+    dummy_dir = KNOWN_DATASETS["dummy_kg"]["default_path"]
+    if os.path.isdir(dummy_dir):
+        cfg = resolve_dataset(dummy_dir)
         print(f"OK: resolve_dataset(path) -> name={cfg['name']}, path={cfg['path']}")
 
     # ---- SECTION 3: dual-discriminator architecture imports (candidate_v2) ----
@@ -93,14 +98,14 @@ def main():
     # ---- SECTION 4: load_kg on dummy_kg ----
     section("SECTION 4: load_kg on dummy_kg")
 
-    if os.path.isdir("data/dummy_kg"):
-        kg = load_kg("data/dummy_kg")
-        print(f"OK: load_kg(data/dummy_kg)")
+    if os.path.isdir(dummy_dir):
+        kg = load_kg(dummy_dir)
+        print(f"OK: load_kg({dummy_dir})")
         print(f"    {kg['n_ent']} entities, {kg['n_rel']} relations")
         print(f"    train={len(kg['triples_train'])}  "
               f"valid={len(kg['triples_valid'])}  test={len(kg['triples_test'])}")
     else:
-        print("SKIP: data/dummy_kg not present in cwd")
+        print(f"SKIP: {dummy_dir} not present relative to cwd")
 
     section("ALL CHECKS PASSED")
     return 0

@@ -1,4 +1,8 @@
-"""KGSAGE command-line tools (run from repo root with PYTHONPATH=experiments).
+"""KGSAGE command-line tools.
+
+Run every one of them with `python -m` from the directory that CONTAINS
+`kgsage/` — invoking a file by path puts `kgsage/` itself on sys.path instead
+of its parent, and `import kgsage` then fails.
 
 The current flow, tool by tool:
   python -m kgsage.gan.train

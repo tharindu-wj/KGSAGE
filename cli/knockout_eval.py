@@ -18,22 +18,20 @@ showed the final epoch is not the best generator). Default relations are
 FB15K-237; for WN18RR pass e.g. --relations _hypernym
 _derivationally_related_form _member_meronym _has_part.
 
-Run from repo root (any env with torch):
-  PYTHONPATH=experiments python experiments/kgsage/cli/knockout_eval.py \
-      --ckpt <checkpoint.pt> --data data/FB15K-237 [--per_rel 12]
+Run from the directory that contains `kgsage/` (any env with torch):
+  python -m kgsage.cli.knockout_eval \
+      --ckpt <checkpoint.pt> --data kgsage/data/FB15K-237 [--per_rel 12]
 """
 from __future__ import annotations
 import argparse
 import json
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 
-sys.path.insert(0, "experiments")
-from kgsage.corruption_generation import load_checkpoint  # noqa: E402
+from kgsage.corruption_generation import load_checkpoint
 
 # Each eval script writes into its own subfolder under outputs/eval/, resolved
 # relative to this file so the location is correct regardless of cwd.

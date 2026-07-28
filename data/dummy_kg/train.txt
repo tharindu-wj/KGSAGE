@@ -1,0 +1,7 @@
+alice	born_in	paris
+bob	born_in	berlin
+carol	born_in	paris
+paris	capital_of	france
+berlin	capital_of	germany
+alice	lives_in	france
+bob	lives_in	germany

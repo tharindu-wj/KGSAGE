@@ -32,9 +32,9 @@ below. Fixed implementation details are NOT up there — each is defined right
 above the code that uses it and marked `tuned constant:` (grep for that string
 to list them). Only operational flags are on the CLI.
 
-Usage (repo root, pytorch env):
-  PYTHONPATH=experiments python -m kgsage.gan.train \
-      --data data/FB15K-237 --out experiments/kgsage/outputs/checkpoints/run.pt \
+Usage (from the directory that contains `kgsage/`, pytorch env):
+  python -m kgsage.gan.train \
+      --data kgsage/data/FB15K-237 --out kgsage/outputs/checkpoints/run.pt \
       --epochs 8 --snapshot_every 1 [--init_context_from <ckpt> --device cpu]
 """
 
@@ -49,7 +49,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from kgsage.data.loaders import load_kg, build_edge_index
+from kgsage.preprocessing.loaders import load_kg, build_edge_index
 from kgsage.gan.neighbourhood_context_encoder import NeighbourhoodContextEncoder
 from kgsage.gan.generator import CandidateScoringGenerator, gumbel_softmax
 from kgsage.gan.plausibility_discriminator import PlausibilityDiscriminator

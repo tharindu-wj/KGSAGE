@@ -12,8 +12,8 @@ The control arm judges the true triple each corruption was derived from, so a
 judge that calls both blocks False has simply not read the facts.
 
 Run from repo root:
-  PYTHONPATH=experiments python experiments/kgsage/cli/format_for_llm.py \
-      --csv experiments/kgsage/outputs/eval/gen_corruptions/FB15K-237_test_corruptions.csv
+  python -m kgsage.cli.format_for_llm \
+      --csv kgsage/outputs/eval/gen_corruptions/FB15K-237_test_corruptions.csv
 """
 from __future__ import annotations
 import argparse

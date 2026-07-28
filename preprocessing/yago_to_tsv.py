@@ -46,9 +46,9 @@ SUBSAMPLING (why it matters -- READ THIS)
     and the membership sketches handle.
 
 USAGE
-    python experiments/kgsage/data/yago_to_tsv.py \
-        --in  data/YAGO-4.5.0.2-tiny.zip \
-        --out data/YAGO4.5 \
+    python kgsage/preprocessing/yago_to_tsv.py \
+        --in  kgsage/data/YAGO-4.5.0.2-tiny.zip \
+        --out kgsage/data/YAGO4.5 \
         --min_degree 5 --max_entities 30000
 
   --in accepts a .ttl file, a .zip (reads its .ttl members), or a directory.

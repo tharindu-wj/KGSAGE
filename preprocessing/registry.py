@@ -3,13 +3,17 @@
 A convenience lookup that maps a short dataset name to its directory. The
 pattern to add a dataset:
 
-    1. Drop train.txt / valid.txt / test.txt into data/<NAME>/
+    1. Drop train.txt / valid.txt / test.txt into kgsage/data/<NAME>/
        (Tab-separated:  head_string<TAB>relation_string<TAB>tail_string)
 
     2. (Optional) add an entry to KNOWN_DATASETS below so the short name works.
 
     3. Use the dataset directory with the trainer / downstream detector run, e.g.:
-          python -m kgsage.gan.train --data data/<NAME> --out <ckpt>.pt ...
+          python -m kgsage.gan.train --data kgsage/data/<NAME> --out <ckpt>.pt ...
+
+Dataset FILES live in `kgsage/data/`; the code that reads them lives here in
+`kgsage/preprocessing/`. The two were both called "data" before — they are
+deliberately named apart now.
 
 For one-off datasets that don't need a registry entry, pass a filesystem path
 directly. `resolve_dataset()` distinguishes names from paths and returns a
@@ -19,20 +23,28 @@ trainer, not stored here.
 import os
 
 
-# The registry keys and the data/<DIR> names below are FROZEN: the SLURM `case`
-# labels and the on-disk paths use them verbatim.
+# PATHS ARE RELATIVE TO THE CWD, and the CWD is expected to be the directory
+# that CONTAINS `kgsage/` — the same place you run `python -m kgsage.gan.train`
+# from (see README.md). Run from anywhere else and you must pass `--data` a
+# path of your own; nothing here is resolved against the package directory.
+#
+# FROZEN: the registry KEYS ("fb15k237", "wn18rr", "yago45") and the paths
+# below are shared verbatim with the `case` labels and DATA_DIR literals in
+# slurm/*.slurm — change either side and they drift apart. Those jobs pass
+# `--data` explicitly and never import this module, so nothing enforces the
+# agreement but this comment.
 KNOWN_DATASETS = {
-    # Register a dataset only once its data/<NAME>/ directory can exist on disk;
-    # resolve_dataset() otherwise "succeeds" with a 0-triple KG.
-    "fb15k237":   {"default_path": "data/FB15K-237",  "n_relations": 237},
-    "wn18rr":     {"default_path": "data/WN18RR",     "n_relations": 11},
-    "fb15k_mini": {"default_path": "data/FB15K-mini", "n_relations": 213},
-    "dummy_kg":   {"default_path": "data/dummy_kg",   "n_relations": 3},
-    # YAGO 4.5: produced by kgsage/data/yago_to_tsv.py from the -tiny Turtle release.
-    # n_relations is nominal (the real count depends on the converter's
-    # --relations / --min_degree / --max_entities options and is discovered at
-    # load time); the directory is gitignored (data/YAGO*).
-    "yago45":     {"default_path": "data/YAGO4.5",    "n_relations": None},
+    # Register a dataset only once its kgsage/data/<NAME>/ directory can exist
+    # on disk; resolve_dataset() otherwise "succeeds" with a 0-triple KG.
+    "fb15k237":   {"default_path": "kgsage/data/FB15K-237",  "n_relations": 237},
+    "wn18rr":     {"default_path": "kgsage/data/WN18RR",     "n_relations": 11},
+    "fb15k_mini": {"default_path": "kgsage/data/FB15K-mini", "n_relations": 213},
+    "dummy_kg":   {"default_path": "kgsage/data/dummy_kg",   "n_relations": 3},
+    # YAGO 4.5: produced by kgsage/preprocessing/yago_to_tsv.py from the -tiny
+    # Turtle release. n_relations is nominal (the real count depends on the
+    # converter's --relations / --min_degree / --max_entities options and is
+    # discovered at load time); the directory is gitignored (data/YAGO*).
+    "yago45":     {"default_path": "kgsage/data/YAGO4.5",    "n_relations": None},
 }
 
 

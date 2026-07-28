@@ -3,8 +3,7 @@
 Read `gan/` as "the adversarial training stack" -- it holds the context
 encoder, the membership sketches and the candidate sampler as well as the GAN
 itself. The folder name is kept because `python -m kgsage.gan.train` is the
-documented entry point used by the SLURM launchers, commands.md and the
-notebook.
+documented entry point used by the SLURM launchers and the notebooks.
 
 Architecture string in every checkpoint: "candidate_v2" (frozen literal; it
 names this dual-discriminator architecture and is compared as a string in
@@ -37,9 +36,9 @@ Modules, named after the paper's Methodology section:
 
   Phase 3 -- Corruption Generation
     (not in this package) `kgsage.corruption_generation` loads a checkpoint and
-    emits one corruption per input triple -- the same pipeline `kgsage_bridge`
-    uses to feed the downstream detector, where a corruption is called a
-    negative during training and an anomaly during evaluation.
+    emits one corruption per input triple -- the same pipeline a downstream
+    detector consumes, where a corruption is called a negative during training
+    and an anomaly during evaluation.
 """
 from kgsage.gan.generator import CandidateScoringGenerator, gumbel_softmax
 from kgsage.gan.plausibility_discriminator import PlausibilityDiscriminator

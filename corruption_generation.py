@@ -2,15 +2,17 @@
 
 Loads a trained KGSAGE checkpoint and produces one corruption per input
 triple. This is the public generation API of the package — a downstream
-detector calls it (through a bridge such as kgsage_bridge.bridge) every time
-it needs a batch of negatives. Everything stays in-process; no intermediate
-files. PyG is never needed here: the checkpoint carries the frozen context
-table E' and the membership sketches.
+anomaly detector calls it (directly, or through its own thin bridge module)
+every time it needs a batch of negatives. Everything stays in-process; no
+intermediate files. PyG is never needed here: the checkpoint carries the
+frozen context table E' and the membership sketches.
 
 Vocabulary note: inside kgsage/ the emitted false triple is always a
-CORRUPTION. The bridge is what re-labels it a "negative" (training) or an
-"anomaly" (evaluation) for the detector — that is a deliberate seam, not two
-names for one thing drifting apart. See experiments/docs/KGSAGE_glossary.md.
+CORRUPTION. The detector side is what re-labels it a "negative" (training) or
+an "anomaly" (evaluation) — that is a deliberate seam, not two names for one
+thing drifting apart. It is also why the entry point below is called
+`generate_negatives` even though this package only ever says "corruption":
+that name faces the detector and is frozen.
 
 The pipeline, one corruption per real triple:
 
@@ -56,8 +58,8 @@ def load_checkpoint(ckpt_path, device=None):
     --init_context_from E' donors for the trainer, which reads their tensors
     directly and never calls this function.
 
-    `load_checkpoint` is a frozen public name: the bridge re-exports it as
-    load_gan for repo-root dataset.py.
+    `load_checkpoint` is a frozen public name — downstream detector code
+    re-exports it (e.g. as `load_gan`), so renaming it breaks those callers.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -80,11 +82,12 @@ def _load_candidate_v2_payload(saved, ckpt_path, device):
     """Build the runtime payload dict from a candidate_v2 checkpoint.
 
     The keys of the returned dict are a contract — knockout_eval, the CLI
-    scripts and the bridge all read them. Do not rename them.
+    scripts and any downstream detector code all read them. Do not rename them.
 
     `saved` holds the ON-DISK payload keys, which are frozen: renaming any of
     them would make every archived .pt unloadable. The runtime dict this
-    returns uses glossary vocabulary instead.
+    returns uses the module's own vocabulary instead (see the Vocabulary note
+    at the top of this file).
     """
     from kgsage.gan.generator import CandidateScoringGenerator
 
@@ -254,9 +257,9 @@ def generate_negatives(triples, payload, id_maps, rng=None,
                        batch_size=256, max_resample=8, support_max=None):
     """Generate one corruption per input triple. Main entry point.
 
-    The name `generate_negatives` is frozen — repo-root dataset.py reaches it
-    through kgsage_bridge. Inside kgsage/ the emitted object is a CORRUPTION;
-    the bridge is what presents it to the detector as a "negative".
+    The name `generate_negatives` is frozen — downstream detector pipelines
+    call it directly. Inside kgsage/ the emitted object is a CORRUPTION; it is
+    the detector side that presents it as a "negative".
 
     triples      : list of (h, r, t) in the CALLER's integer id space.
     payload      : the dict returned by load_checkpoint().
@@ -318,8 +321,8 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
              ent2id_gen[id_maps["id2ent"][t_caller]]))
 
     corruptions = []
-    # used_original / null_indices are frozen stats keys; repo-root dataset.py
-    # reads them through the bridge to find and replace null corruptions.
+    # used_original / null_indices are frozen stats keys; downstream callers
+    # read them to find and replace null corruptions before training.
     stats = {"processed": 0, "used_original": 0, "null_indices": [],
              "resampled": 0, "type_valid": 0, "slot_h": 0, "slot_r": 0,
              "slot_t": 0, "corroboration_lifted": 0}
@@ -405,8 +408,8 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
 def render_stats(stats):
     """Human-readable one-line summary of one batch of generation.
 
-    Frozen public name AND frozen output shape: repo-root dataset.py prints
-    this line, so the field names below stay as they are for log
+    Frozen public name AND frozen output shape: downstream training logs print
+    this line verbatim, so the field names below stay as they are for log
     comparability with runs already collected.
     """
     total = stats["slot_h"] + stats["slot_r"] + stats["slot_t"]

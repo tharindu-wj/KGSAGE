@@ -19,10 +19,10 @@ Reading a figure:
     red dashed    the corrupted edge            green node  true tail
     grey nodes    1-hop (darker) / 2-hop        red node    picked candidate
 
-Run from repo root (pytorch env):
-  PYTHONPATH=experiments python experiments/kgsage/cli/ego_from_csv.py \
-      --csv experiments/kgsage/outputs/eval/fb_corruptions.csv \
-      --data data/FB15K-237 --out_dir experiments/kgsage/outputs/eval/ego --limit 6
+Run from the directory that contains `kgsage/` (pytorch env):
+  python -m kgsage.cli.ego_from_csv \
+      --csv kgsage/outputs/eval/fb_corruptions.csv \
+      --data kgsage/data/FB15K-237 --out_dir kgsage/outputs/eval/ego --limit 6
 """
 from __future__ import annotations
 
@@ -138,8 +138,8 @@ def _structured_layout(G, head, tail, picked_candidate):
     """Pin the three focus nodes far apart, assign every other node to its
     nearest focus node, and fan it onto an arc pointing away from the middle --
     so the true edge and the corrupted edge always run through open space."""
-    # "pinned" is a layout concept (the three big nodes), not the glossary's
-    # anchor -- the anchor is whichever of them keeps its slot in the triple.
+    # "pinned" is a layout concept (the three big nodes), not KGSAGE's ANCHOR
+    # -- the anchor is whichever of them keeps its slot in the triple.
     pinned = {head: (-4.0, 0.4), tail: (4.0, 2.2)}
     if picked_candidate and picked_candidate not in pinned:
         pinned[picked_candidate] = (4.0, -2.6)
