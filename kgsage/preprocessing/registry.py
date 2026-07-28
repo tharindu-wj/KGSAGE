@@ -22,29 +22,30 @@ trainer, not stored here.
 """
 import os
 
+from kgsage.paths import DATA_ROOT
 
-# PATHS ARE RELATIVE TO THE CWD, and the CWD is expected to be the directory
-# that CONTAINS `kgsage/` — the same place you run `python -m kgsage.gan.train`
-# from (see README.md). Run from anywhere else and you must pass `--data` a
-# path of your own; nothing here is resolved against the package directory.
+
+# Paths are ABSOLUTE, resolved from DATA_ROOT (see kgsage/paths.py), so a lookup
+# returns the same directory from any working directory. Set KGSAGE_DATA to move
+# the whole collection -- e.g. onto cluster scratch. Passing `--data <path>`
+# still bypasses the registry entirely for one-off datasets.
 #
-# FROZEN: the registry KEYS ("fb15k237", "wn18rr", "yago45") and the paths
-# below are shared verbatim with the `case` labels and DATA_DIR literals in
-# slurm/*.slurm — change either side and they drift apart. Those jobs pass
-# `--data` explicitly and never import this module, so nothing enforces the
-# agreement but this comment.
+# FROZEN: the registry KEYS ("fb15k237", "wn18rr", "yago45") are shared verbatim
+# with the `case` labels in slurm/*.slurm — change either side and they drift
+# apart. Those jobs pass `--data` explicitly and never import this module, so
+# nothing enforces the agreement but this comment.
 KNOWN_DATASETS = {
-    # Register a dataset only once its kgsage/data/<NAME>/ directory can exist
+    # Register a dataset only once its <DATA_ROOT>/<NAME>/ directory can exist
     # on disk; resolve_dataset() otherwise "succeeds" with a 0-triple KG.
-    "fb15k237":   {"default_path": "kgsage/data/FB15K-237",  "n_relations": 237},
-    "wn18rr":     {"default_path": "kgsage/data/WN18RR",     "n_relations": 11},
-    "fb15k_mini": {"default_path": "kgsage/data/FB15K-mini", "n_relations": 213},
-    "dummy_kg":   {"default_path": "kgsage/data/dummy_kg",   "n_relations": 3},
+    "fb15k237":   {"default_path": str(DATA_ROOT / "FB15K-237"),  "n_relations": 237},
+    "wn18rr":     {"default_path": str(DATA_ROOT / "WN18RR"),     "n_relations": 11},
+    "fb15k_mini": {"default_path": str(DATA_ROOT / "FB15K-mini"), "n_relations": 213},
+    "dummy_kg":   {"default_path": str(DATA_ROOT / "dummy_kg"),   "n_relations": 3},
     # YAGO 4.5: produced by kgsage/preprocessing/yago_to_tsv.py from the -tiny
     # Turtle release. n_relations is nominal (the real count depends on the
     # converter's --relations / --min_degree / --max_entities options and is
     # discovered at load time); the directory is gitignored (data/YAGO*).
-    "yago45":     {"default_path": "kgsage/data/YAGO4.5",    "n_relations": None},
+    "yago45":     {"default_path": str(DATA_ROOT / "YAGO4.5"),    "n_relations": None},
 }
 
 

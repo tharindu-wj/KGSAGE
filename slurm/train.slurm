@@ -3,14 +3,19 @@
 # Encoding) + Phase 2 (Adversarial Generator Training, dual-discriminator
 # architecture, LP-free). One job per dataset.
 #
-#   DATASET=fb15k237 sbatch kgsage/slurm/train.slurm
-#   DATASET=wn18rr   sbatch kgsage/slurm/train.slurm
-#   DATASET=yago45   sbatch kgsage/slurm/train.slurm   # build kgsage/data/YAGO4.5
-#                                                      # first: kgsage/preprocessing/yago_to_tsv.py
+# Submit from the KGSAGE repo root:
+#   DATASET=fb15k237 sbatch slurm/train.slurm
+#   DATASET=wn18rr   sbatch slurm/train.slurm
+#   DATASET=yago45   sbatch slurm/train.slurm   # build data/YAGO4.5 first:
+#                                               # kgsage/preprocessing/yago_to_tsv.py
 #
-# PROJECT_DIR must point at the directory that CONTAINS kgsage/ (that is what
-# goes on PYTHONPATH, and every path below is relative to it):
-#   PROJECT_DIR=$HOME/my-kg-work DATASET=wn18rr sbatch kgsage/slurm/train.slurm
+# REPO_DIR is the KGSAGE checkout itself (the directory holding kgsage/, data/,
+# outputs/ and slurm/). The package is pip-installed, so no PYTHONPATH is set:
+#   REPO_DIR=$HOME/kgsage DATASET=wn18rr sbatch slurm/train.slurm
+#
+# Datasets default to REPO_DIR/data/<NAME>. On a cluster it is usually better to
+# keep them on scratch -- export KGSAGE_DATA=/scratch/$USER/kg and KGSAGE_OUTPUTS
+# likewise, and both the registry and the eval CLIs follow.
 #
 # The locked recipe (curriculum, the PI controller on alpha, architecture)
 # lives as constants at the top of kgsage/gan/train.py -- edit there to
@@ -32,22 +37,22 @@
 
 set -eo pipefail
 
-# The directory that CONTAINS kgsage/ -- override for your own checkout.
-PROJECT_DIR="${PROJECT_DIR:-$HOME/kgsage-project}"
+# The KGSAGE checkout -- override for your own path.
+REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/kgsage}}"
 CONDA_ENV="${CONDA_ENV:-$HOME/envs/kgsage}"
 
 DATASET="${DATASET:-fb15k237}"
 case "$DATASET" in
-  fb15k237) DATA_DIR="kgsage/data/FB15K-237"; TAG="fb15k237" ;;
-  wn18rr)   DATA_DIR="kgsage/data/WN18RR";    TAG="wn18rr"   ;;
-  yago45)   DATA_DIR="kgsage/data/YAGO4.5";   TAG="yago45"   ;;
+  fb15k237) DATA_DIR="${KGSAGE_DATA:-data}/FB15K-237"; TAG="fb15k237" ;;
+  wn18rr)   DATA_DIR="${KGSAGE_DATA:-data}/WN18RR";    TAG="wn18rr"   ;;
+  yago45)   DATA_DIR="${KGSAGE_DATA:-data}/YAGO4.5";   TAG="yago45"   ;;
   *) echo "ERROR: DATASET must be fb15k237, wn18rr or yago45 (got '$DATASET')" >&2; exit 1 ;;
 esac
 
 SEED="${SEED:-0}"
 EPOCHS="${EPOCHS:-8}"
 SNAPSHOT_EVERY="${SNAPSHOT_EVERY:-1}"
-CKPT_PATH="${CKPT_PATH:-kgsage/outputs/checkpoints/run_${TAG}_s${SEED}.pt}"
+CKPT_PATH="${CKPT_PATH:-${KGSAGE_OUTPUTS:-outputs}/checkpoints/run_${TAG}_s${SEED}.pt}"
 
 echo "Job $SLURM_JOB_ID on $(hostname) starting $(date)"
 echo "Dataset : $DATASET ($DATA_DIR)  Seed: $SEED  Epochs: $EPOCHS  Snapshots: every $SNAPSHOT_EVERY"
@@ -64,8 +69,12 @@ PY="$CONDA_ENV/bin/python"
 
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export PYTHONUNBUFFERED=1
-cd "$PROJECT_DIR"
-export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+cd "$REPO_DIR"
+# No PYTHONPATH: kgsage is pip-installed (`pip install -e .` from this repo).
+$PY -c "import kgsage" 2>/dev/null || {
+    echo "ERROR: kgsage is not importable in $CONDA_ENV." >&2
+    echo "  Install it once:  cd $REPO_DIR && $PY -m pip install -e ." >&2
+    exit 1; }
 
 $PY -c "import torch; assert torch.cuda.is_available(), 'no GPU'; print('GPU:', torch.cuda.get_device_name(0))"
 $PY -c "from torch_geometric.nn import RGCNConv; print('PyG OK')"
@@ -88,3 +97,6 @@ echo "Done $(date). Checkpoint: $CKPT_PATH"
 echo "Bring back the checkpoint AND this .out.txt (the corr-pick/alpha/dm-online"
 echo "trajectories are the training-health record). Then select the epoch:"
 echo "  python -m kgsage.cli.knockout_eval --ckpt <each .epNN.pt> --data $DATA_DIR"
+echo ""
+echo "Hand the winning snapshot to the detector repo (separate checkout):"
+echo "  cp $CKPT_PATH <adkgd>/artifacts/kgsage/"

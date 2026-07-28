@@ -105,7 +105,7 @@ def main():
         print(f"    train={len(kg['triples_train'])}  "
               f"valid={len(kg['triples_valid'])}  test={len(kg['triples_test'])}")
     else:
-        print(f"SKIP: {dummy_dir} not present relative to cwd")
+        print(f"SKIP: {dummy_dir} not on disk (set KGSAGE_DATA if data lives elsewhere)")
 
     section("ALL CHECKS PASSED")
     return 0

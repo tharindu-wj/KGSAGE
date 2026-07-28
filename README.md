@@ -27,21 +27,31 @@ An adversarial generator, trained without a link predictor:
 ## Install
 
 ```bash
-pip install torch numpy
-pip install torch_geometric        # step 1 only (RGCN encoder)
-pip install matplotlib networkx    # optional, for the ego-graph figures
+# From this repo root. Editable, so the checkout stays authoritative.
+pip install -e .
+
+# Optional extra: only kgsage.cli.ego_from_csv needs it.
+pip install -e ".[viz]"
 ```
+
+On a cluster, install torch and torch-geometric **first**, matching the node's
+CUDA build. The dependencies here are deliberately unpinned, so pip leaves an
+existing install alone rather than replacing a CUDA wheel with a CPU one.
 
 ## Layout
 
 ```
-kgsage/
-  corruption_generation.py   generation API (no PyG needed)
-  gan/                       training stack: encoder, sketches, sampler,
+<repo root>
+  pyproject.toml             packaging; `pip install -e .`
+  kgsage/                    THE PACKAGE
+    paths.py                 where artifacts and datasets resolve to
+    corruption_generation.py generation API (no PyG needed)
+    gan/                     training stack: encoder, sketches, sampler,
                              generator, both discriminators, train.py
-  cli/                       command-line tools
-  preprocessing/             CODE: TSV loaders, dataset registry, converters
+    cli/                     command-line tools
+    preprocessing/           CODE: TSV loaders, dataset registry, converters
   data/                      DATA: the dataset directories themselves
+  outputs/                   run artifacts: checkpoints, eval output (gitignored)
   slurm/                     HPC launchers (see slurm/README.md)
   smoke_test.py              import + structure check
 ```
@@ -49,26 +59,48 @@ kgsage/
 `preprocessing/` is the code that reads knowledge graphs; `data/` holds the
 graphs. (Before, both were `data/` — hence the split.)
 
+Two environment variables relocate the two roots, which is how the SLURM
+launchers keep large files off `$HOME`:
+
+| Variable | Default | What moves |
+|---|---|---|
+| `KGSAGE_DATA` | `<repo root>/data` | where the registry looks for `<name>/train.txt` |
+| `KGSAGE_OUTPUTS` | `<repo root>/outputs` | checkpoints and eval output |
+
+Set `KGSAGE_OUTPUTS` after a **non-editable** install, or artifacts resolve into
+site-packages.
+
 ## Usage
 
-Run all commands from the directory that **contains** `kgsage/`, and always via
-`python -m` — invoking a file by path puts `kgsage/` itself on `sys.path`
-instead of its parent, and `import kgsage` then fails.
+The package is installed, so these run from anywhere. Paths below assume you are
+at the repo root.
 
 ```bash
 # 0. verify the install (imports + loads the tiny data/dummy_kg fixture)
-python -m kgsage.smoke_test
+python smoke_test.py
 
 # 1. train (saves one snapshot per epoch)
-python -m kgsage.gan.train --data kgsage/data/FB15K-237 \
-    --out kgsage/outputs/checkpoints/run.pt --epochs 8 --snapshot_every 1
+python -m kgsage.gan.train --data data/FB15K-237 \
+    --out outputs/checkpoints/run.pt --epochs 8 --snapshot_every 1
 
 # 2. pick the best snapshot: lowest mean knockout J@10
-python -m kgsage.cli.knockout_eval --ckpt <snapshot>.pt --data kgsage/data/FB15K-237
+python -m kgsage.cli.knockout_eval --ckpt <snapshot>.pt --data data/FB15K-237
 
 # 3. generate corruptions to CSV
 python -m kgsage.cli.gen_corruptions_csv --ckpt <chosen>.pt \
-    --data kgsage/data/FB15K-237 --split test --per_rel 4 --seed 7
+    --data data/FB15K-237 --split test --per_rel 4 --seed 7
+```
+
+Registered datasets can be named instead of pathed: `--data fb15k237` resolves
+through `kgsage/preprocessing/registry.py`.
+
+### Handing a checkpoint to a detector
+
+This package produces checkpoints; it never runs a detector. To use one
+downstream, copy it across and point the detector at it:
+
+```bash
+cp outputs/checkpoints/run_wn18rr_s0.ep06.pt <detector-repo>/artifacts/kgsage/
 ```
 
 Helpers that read that CSV: `kgsage.cli.ego_from_csv` (ego-graph figures),

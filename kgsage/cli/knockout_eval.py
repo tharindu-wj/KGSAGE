@@ -33,9 +33,7 @@ import torch
 
 from kgsage.corruption_generation import load_checkpoint
 
-# Each eval script writes into its own subfolder under outputs/eval/, resolved
-# relative to this file so the location is correct regardless of cwd.
-_EVAL_ROOT = Path(__file__).resolve().parents[1] / "outputs" / "eval"
+from kgsage.paths import EVAL_ROOT as _EVAL_ROOT
 
 
 def _text(p):

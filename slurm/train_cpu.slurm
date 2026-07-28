@@ -6,11 +6,11 @@
 # warm-up runs on CPU (fine for small KGs -- YAGO/WN warm up in minutes on a
 # CPU node).
 #
-#   CPU_PARTITION=<name> DATASET=fb15k237 sbatch kgsage/slurm/train_cpu.slurm
-#   CPU_PARTITION=<name> DATASET=wn18rr   sbatch kgsage/slurm/train_cpu.slurm
-#   CPU_PARTITION=<name> DATASET=yago45   sbatch kgsage/slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=fb15k237 sbatch slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=wn18rr   sbatch slurm/train_cpu.slurm
+#   CPU_PARTITION=<name> DATASET=yago45   sbatch slurm/train_cpu.slurm
 #
-# PROJECT_DIR must point at the directory that CONTAINS kgsage/ (see train.slurm).
+# REPO_DIR is the KGSAGE checkout itself (see train.slurm). Submit from there.
 #
 # !! Set CPU_PARTITION to a real non-GPU partition -- run `sinfo -s` to list them
 #    (Flinders DeepThought commonly has a 'general'/'hpc' CPU partition).
@@ -35,14 +35,14 @@
 set -eo pipefail
 
 # The directory that CONTAINS kgsage/ -- override for your own checkout.
-PROJECT_DIR="${PROJECT_DIR:-$HOME/kgsage-project}"
+REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/kgsage}}"
 CONDA_ENV="${CONDA_ENV:-$HOME/envs/kgsage}"
 
 DATASET="${DATASET:-fb15k237}"
 case "$DATASET" in
-  fb15k237) DATA_DIR="kgsage/data/FB15K-237"; TAG="fb15k237" ;;
-  wn18rr)   DATA_DIR="kgsage/data/WN18RR";    TAG="wn18rr"   ;;
-  yago45)   DATA_DIR="kgsage/data/YAGO4.5";   TAG="yago45"   ;;
+  fb15k237) DATA_DIR="${KGSAGE_DATA:-data}/FB15K-237"; TAG="fb15k237" ;;
+  wn18rr)   DATA_DIR="${KGSAGE_DATA:-data}/WN18RR";    TAG="wn18rr"   ;;
+  yago45)   DATA_DIR="${KGSAGE_DATA:-data}/YAGO4.5";   TAG="yago45"   ;;
   *) echo "ERROR: DATASET must be fb15k237, wn18rr or yago45 (got '$DATASET')" >&2; exit 1 ;;
 esac
 
@@ -53,8 +53,8 @@ esac
 SEED="${SEED:-0}"
 EPOCHS="${EPOCHS:-8}"
 SNAPSHOT_EVERY="${SNAPSHOT_EVERY:-1}"
-CKPT_PATH="${CKPT_PATH:-kgsage/outputs/checkpoints/run_${TAG}_s${SEED}.pt}"
-INIT_E="${INIT_E:-kgsage/outputs/checkpoints/kgsage_${TAG}_s${SEED}.pt}"
+CKPT_PATH="${CKPT_PATH:-${KGSAGE_OUTPUTS:-outputs}/checkpoints/run_${TAG}_s${SEED}.pt}"
+INIT_E="${INIT_E:-${KGSAGE_OUTPUTS:-outputs}/checkpoints/kgsage_${TAG}_s${SEED}.pt}"
 
 # Use the E'-donor to skip the Phase-1 warm-up if it exists; else warm up on CPU.
 INIT_ARGS=()
@@ -83,8 +83,12 @@ PY="$CONDA_ENV/bin/python"
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export PYTHONUNBUFFERED=1
-cd "$PROJECT_DIR"
-export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+cd "$REPO_DIR"
+# No PYTHONPATH: kgsage is pip-installed (`pip install -e .` from this repo).
+$PY -c "import kgsage" 2>/dev/null || {
+    echo "ERROR: kgsage is not importable in $CONDA_ENV." >&2
+    echo "  Install it once:  cd $REPO_DIR && $PY -m pip install -e ." >&2
+    exit 1; }
 mkdir -p "$(dirname "$CKPT_PATH")"
 
 $PY -m kgsage.gan.train \

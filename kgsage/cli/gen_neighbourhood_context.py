@@ -30,7 +30,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-_EVAL_ROOT = Path(__file__).resolve().parents[1] / "outputs" / "eval"
+from kgsage.paths import EVAL_ROOT as _EVAL_ROOT
 
 PREDICATE = {
     # --- FB15K-237 ---
