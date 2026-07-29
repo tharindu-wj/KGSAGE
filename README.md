@@ -105,6 +105,12 @@ downstream, copy it across and point the detector at it:
 cp outputs/checkpoints/run_wn18rr_s0.ep06.pt <detector-repo>/artifacts/kgsage/
 ```
 
+[**ADKGD**](https://github.com/tharindu-wj/ADKGD) is the downstream anomaly
+detector KGSAGE is tested against — it consumes these checkpoints from
+`artifacts/kgsage/` and scores the emitted corruptions as anomalies. It is the
+reference consumer of the contract described below, and a worked example of
+what the other side of that `cp` looks like.
+
 Helpers that read that CSV: `kgsage.cli.ego_from_csv` (ego-graph figures),
 `kgsage.cli.format_for_llm` and `kgsage.cli.gen_neighbourhood_context`
 (paste-ready blocks for LLM evaluation).
