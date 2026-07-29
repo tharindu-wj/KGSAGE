@@ -1,4 +1,6 @@
-# kgsage
+# KGSAGE
+
+![kgsage — corrupting knowledge-graph triples into false-but-plausible negatives](assets/hero-image.svg)
 
 **K**nowledge **G**raph **S**emantic **A**nomaly **GE**nerator — a standalone
 Python package that turns real knowledge-graph triples into *corruptions*:
