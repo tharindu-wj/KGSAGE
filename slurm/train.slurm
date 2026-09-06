@@ -17,7 +17,7 @@
 #
 # REPO_DIR is the KGSAGE checkout itself (the directory holding kgsage/, data/,
 # outputs/ and slurm/). The package is pip-installed, so no PYTHONPATH is set:
-#   REPO_DIR=$HOME/kgsage DATASET=wn18rr sbatch slurm/train.slurm
+#   REPO_DIR=$HOME/KGSAGE DATASET=wn18rr sbatch slurm/train.slurm
 #
 # Datasets default to REPO_DIR/data/<NAME>. On a cluster it is usually better to
 # keep them on scratch -- export KGSAGE_DATA=/scratch/$USER/kg and KGSAGE_OUTPUTS
@@ -44,8 +44,11 @@
 set -eo pipefail
 
 # The KGSAGE checkout -- override for your own path.
-REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/kgsage}}"
-CONDA_ENV="${CONDA_ENV:-$HOME/envs/kgsage}"
+# Both case-sensitive on the cluster: the checkout is $HOME/KGSAGE, and the
+# conda env is 'adkgd' (shared with the detector repo -- there is no separate
+# 'kgsage' env). Override either with the matching env var.
+REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/KGSAGE}}"
+CONDA_ENV="${CONDA_ENV:-$HOME/envs/adkgd}"
 
 DATASET="${DATASET:-fb15k237}"
 case "$DATASET" in

@@ -35,8 +35,9 @@
 set -eo pipefail
 
 # The directory that CONTAINS kgsage/ -- override for your own checkout.
-REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/kgsage}}"
-CONDA_ENV="${CONDA_ENV:-$HOME/envs/kgsage}"
+# See train.slurm: $HOME/KGSAGE and the shared 'adkgd' env, both case-sensitive.
+REPO_DIR="${REPO_DIR:-${PROJECT_DIR:-$HOME/KGSAGE}}"
+CONDA_ENV="${CONDA_ENV:-$HOME/envs/adkgd}"
 
 DATASET="${DATASET:-fb15k237}"
 case "$DATASET" in
