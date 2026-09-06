@@ -43,7 +43,8 @@ case "$DATASET" in
   fb15k237) DATA_DIR="${KGSAGE_DATA:-data}/FB15K-237"; TAG="fb15k237" ;;
   wn18rr)   DATA_DIR="${KGSAGE_DATA:-data}/WN18RR";    TAG="wn18rr"   ;;
   yago45)   DATA_DIR="${KGSAGE_DATA:-data}/YAGO4.5";   TAG="yago45"   ;;
-  *) echo "ERROR: DATASET must be fb15k237, wn18rr or yago45 (got '$DATASET')" >&2; exit 1 ;;
+  codex-s)  DATA_DIR="${KGSAGE_DATA:-data}/codex-s";   TAG="codex-s"  ;;
+  *) echo "ERROR: DATASET must be fb15k237, wn18rr, yago45 or codex-s (got '$DATASET')" >&2; exit 1 ;;
 esac
 
 # The locked recipe lives as constants in kgsage/gan/train.py; only operational

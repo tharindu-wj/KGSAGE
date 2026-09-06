@@ -8,6 +8,12 @@
 #   DATASET=wn18rr   sbatch slurm/train.slurm
 #   DATASET=yago45   sbatch slurm/train.slurm   # build data/YAGO4.5 first:
 #                                               # kgsage/preprocessing/yago_to_tsv.py
+#   DATASET=codex-s  sbatch slurm/train.slurm   # CoDEx-S (Wikidata QIDs/PIDs)
+#
+# Snapshot selection on codex-s needs its own relations -- knockout_eval's
+# defaults are Freebase paths that do not exist there:
+#   python -m kgsage.cli.knockout_eval --ckpt <snap>.pt --data data/codex-s \
+#       --relations P27 P106 P19 P136 P1412 P20
 #
 # REPO_DIR is the KGSAGE checkout itself (the directory holding kgsage/, data/,
 # outputs/ and slurm/). The package is pip-installed, so no PYTHONPATH is set:
@@ -46,7 +52,8 @@ case "$DATASET" in
   fb15k237) DATA_DIR="${KGSAGE_DATA:-data}/FB15K-237"; TAG="fb15k237" ;;
   wn18rr)   DATA_DIR="${KGSAGE_DATA:-data}/WN18RR";    TAG="wn18rr"   ;;
   yago45)   DATA_DIR="${KGSAGE_DATA:-data}/YAGO4.5";   TAG="yago45"   ;;
-  *) echo "ERROR: DATASET must be fb15k237, wn18rr or yago45 (got '$DATASET')" >&2; exit 1 ;;
+  codex-s)  DATA_DIR="${KGSAGE_DATA:-data}/codex-s";   TAG="codex-s"  ;;
+  *) echo "ERROR: DATASET must be fb15k237, wn18rr, yago45 or codex-s (got '$DATASET')" >&2; exit 1 ;;
 esac
 
 SEED="${SEED:-0}"

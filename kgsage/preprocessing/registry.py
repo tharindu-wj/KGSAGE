@@ -30,10 +30,10 @@ from kgsage.paths import DATA_ROOT
 # the whole collection -- e.g. onto cluster scratch. Passing `--data <path>`
 # still bypasses the registry entirely for one-off datasets.
 #
-# FROZEN: the registry KEYS ("fb15k237", "wn18rr", "yago45") are shared verbatim
-# with the `case` labels in slurm/*.slurm — change either side and they drift
-# apart. Those jobs pass `--data` explicitly and never import this module, so
-# nothing enforces the agreement but this comment.
+# FROZEN: the registry KEYS ("fb15k237", "wn18rr", "yago45", "codex-s") are
+# shared verbatim with the `case` labels in slurm/*.slurm — change either side
+# and they drift apart. Those jobs pass `--data` explicitly and never import
+# this module, so nothing enforces the agreement but this comment.
 KNOWN_DATASETS = {
     # Register a dataset only once its <DATA_ROOT>/<NAME>/ directory can exist
     # on disk; resolve_dataset() otherwise "succeeds" with a 0-triple KG.
@@ -46,6 +46,9 @@ KNOWN_DATASETS = {
     # converter's --relations / --min_degree / --max_entities options and is
     # discovered at load time); the directory is gitignored (data/YAGO*).
     "yago45":     {"default_path": str(DATA_ROOT / "YAGO4.5"),    "n_relations": None},
+    # CoDEx-S: Wikidata QIDs/PIDs. Directory name is lowercase on disk and the
+    # cluster is case-sensitive, so it must stay "codex-s" on both sides.
+    "codex-s":    {"default_path": str(DATA_ROOT / "codex-s"),    "n_relations": 42},
 }
 
 
