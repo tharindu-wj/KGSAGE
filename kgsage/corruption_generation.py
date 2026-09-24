@@ -50,8 +50,13 @@ import numpy as np
 import torch
 
 
-def load_checkpoint(ckpt_path, device=None):
+def load_checkpoint(ckpt_path, device=None, types_path=None):
     """Reconstruct the trained generator and its lookup tables from a .pt file.
+
+    types_path (optional): a JSON {entity: [type_id, ...]} in the generator's
+    entity vocabulary, attached as the payload's entity KINDS for the guards
+    of generate_negatives (see attach_entity_types). The checkpoint itself
+    carries no types.
 
     Only candidate_v2 payloads (CandidateScoringGenerator + membership
     sketches) are loadable. Older checkpoints remain useful only as
@@ -68,7 +73,13 @@ def load_checkpoint(ckpt_path, device=None):
 
     # frozen arch literal; "candidate_v2" = the dual-discriminator architecture
     if payload.get("arch") == "candidate_v2":
-        return _load_candidate_v2_payload(payload, ckpt_path, device)
+        loaded = _load_candidate_v2_payload(payload, ckpt_path, device)
+        if types_path is not None:
+            typed = attach_entity_types(loaded, types_path)
+            print(f"[v2] {ckpt_path}: kinds attached for {typed:,}/"
+                  f"{loaded['n_ent']:,} entities from {types_path}",
+                  flush=True)
+        return loaded
 
     raise ValueError(
         f"Checkpoint {ckpt_path!r} is not a candidate_v2 payload "
@@ -189,9 +200,143 @@ def corroborated_entities_mask(payload, anchor, support_max=0):
     return mask
 
 
+def attach_entity_types(payload, types_path):
+    """Attach entity KINDS to a loaded payload, for the KIND guard.
+
+    `types_path` is a JSON file {entity_string: [type_id, ...]} in the
+    generator's own entity vocabulary (CoDEx ships one as
+    types/entity2types.json). The checkpoint does not carry types: its
+    "type pool" only records who has occupied a slot before, which is how a
+    country gets decoded as a member of a language academy. This adds the
+    missing table. Returns how many generator entities received kinds.
+    """
+    import json
+    with open(types_path, encoding="utf-8") as handle:
+        raw = json.load(handle)
+    n_ent = payload["n_ent"]
+    kinds = [frozenset() for _ in range(n_ent)]
+    by_kind = {}
+    typed = 0
+    for name, type_ids in raw.items():
+        gid = payload["ent2id"].get(name)
+        if gid is None or not type_ids:
+            continue
+        kinds[gid] = frozenset(type_ids)
+        typed += 1
+        for kind in type_ids:
+            by_kind.setdefault(kind, []).append(gid)
+    payload["kinds"] = kinds
+    payload["_ents_by_kind"] = {
+        kind: np.array(sorted(ids), dtype=np.int64)
+        for kind, ids in by_kind.items()}
+    return typed
+
+
+def _cooccurrence(payload, relation, slot):
+    """Per (relation, slot), built lazily: how often two values are held
+    TOGETHER by the same entity.
+
+    slot 2 (tail corrupted): group the true tails of every head under the
+    relation; slot 0 (head corrupted): group the true heads of every tail.
+    Returns (holders, cooc): holders[v] = how many entities hold v in this
+    slot, cooc[v][u] = how many of those also hold u. So
+    cooc[v][u] / holders[v] is P(u | v), the share of v's holders that also
+    hold u, which is what the SUPPORT guard reads.
+    """
+    cache = payload.setdefault("_cooccurrence_cache", {})
+    key = (relation, slot)
+    if key in cache:
+        return cache[key]
+    groups = {}
+    for h, r, t in payload["real_triple_set"]:
+        if r != relation:
+            continue
+        if slot == 2:
+            groups.setdefault(h, []).append(t)
+        else:
+            groups.setdefault(t, []).append(h)
+    holders, cooc = {}, {}
+    for held in groups.values():
+        for v in held:
+            holders[v] = holders.get(v, 0) + 1
+            row = cooc.setdefault(v, {})
+            for u in held:
+                if u != v:
+                    row[u] = row.get(u, 0) + 1
+    cache[key] = (holders, cooc)
+    return cache[key]
+
+
+def _support_banned(payload, anchor_values, relation, slot, tau,
+                    min_holders=5):
+    """Candidates the graph's own regularities PREDICT for this slot.
+
+    For each true value v the anchor already holds, every u that more than
+    `tau` of v's holders also hold is banned: emitting it would label as
+    false a fact the graph expects to be true ("actor" -> "film actor").
+    Values held by fewer than `min_holders` entities are too thin to judge.
+    """
+    holders, cooc = _cooccurrence(payload, relation, slot)
+    banned = set()
+    for v in anchor_values:
+        count = holders.get(v, 0)
+        if count < min_holders:
+            continue
+        for u, together in cooc.get(v, {}).items():
+            if together / count > tau:
+                banned.add(u)
+    return banned
+
+
+def _kind_allowed(payload, replaced):
+    """Entities sharing at least one kind with the entity being replaced.
+
+    CoDEx's own criterion for a hard negative: the replacement matches the
+    type of the value it replaces. It holds for every hand-verified CoDEx
+    negative at this granularity. None means "cannot judge" (no types
+    attached, or the replaced entity is untyped) and imposes nothing.
+    """
+    kinds = payload.get("kinds")
+    if kinds is None or not kinds[replaced]:
+        return None
+    parts = [payload["_ents_by_kind"][k] for k in kinds[replaced]
+             if k in payload["_ents_by_kind"]]
+    if not parts:
+        return None
+    return np.unique(np.concatenate(parts))
+
+
+def build_guard_mask(payload, h, r, t, slot, guards):
+    """Bool [n_ent] on the payload's device, True = banned by a GUARD.
+
+    guards: {"kind": bool, "support": float | None}. The KIND guard keeps
+    only replacements of the same kind as the true filler; the SUPPORT guard
+    bans values the graph predicts for the anchor. Returns None when no
+    guard has anything to say for this row.
+    """
+    n_ent = payload["n_ent"]
+    true_filler = h if slot == 0 else t
+    ban = None
+    if guards.get("kind", True):
+        allowed = _kind_allowed(payload, true_filler)
+        if allowed is not None:
+            ban = torch.ones(n_ent, dtype=torch.bool)
+            ban[torch.from_numpy(allowed)] = False
+    tau = guards.get("support")
+    if tau is not None:
+        anchor_values = (payload["true_heads"].get((r, t), []) if slot == 0
+                         else payload["true_tails"].get((h, r), []))
+        predicted = _support_banned(payload, anchor_values, r, slot, tau)
+        if predicted:
+            if ban is None:
+                ban = torch.zeros(n_ent, dtype=torch.bool)
+            ban[torch.tensor(sorted(predicted), dtype=torch.long)] = True
+    return None if ban is None else ban.to(payload["device"])
+
+
 def _pick_candidate_index(logits, true_filler_index, torch_rng,
                           banned=None, pool_row=None, other_entity=None,
-                          corroboration_mask=None):
+                          corroboration_mask=None, guard_mask=None):
     """STEPS 4-5 for one row: apply the masks, then Gumbel-pick a candidate.
 
     Masks applied (each optional beyond the true_filler):
@@ -204,13 +349,19 @@ def _pick_candidate_index(logits, true_filler_index, torch_rng,
                            neighbourhood corroborates (see
                            corroborated_entities_mask), making the pick
                            neighbourhood-contradicting by construction.
+      guard_mask         : bool [n_ent] — bans every candidate a GUARD
+                           rejects (build_guard_mask: wrong kind,
+                           graph-predicted, or already emitted). Treated
+                           like a correctness ban.
 
     Picking adds Gumbel noise at temperature 0.5 (mostly argmax) drawn from
     the caller's seeded torch.Generator, so generation is reproducible.
 
     If a row has nothing left to pick, masks are relaxed in order: the
     corroboration mask is lifted first, then the type pool. The correctness
-    bans (true_filler, known-true, self-loop) are NEVER lifted.
+    bans (true_filler, known-true, self-loop) and the guard mask are NEVER
+    lifted: a row with nothing left becomes a null corruption, which the
+    eval role drops.
 
     Returns (index, lifted_corroboration): index is -1 if nothing is
     pickable; lifted_corroboration flags that the corroboration mask had to
@@ -223,6 +374,8 @@ def _pick_candidate_index(logits, true_filler_index, torch_rng,
             masked[banned] = float("-inf")
         if other_entity is not None:
             masked[other_entity] = float("-inf")
+        if guard_mask is not None:
+            masked[guard_mask] = float("-inf")
         return masked
 
     lifted_corroboration = False
@@ -254,7 +407,8 @@ def _pick_candidate_index(logits, true_filler_index, torch_rng,
 
 
 def generate_negatives(triples, payload, id_maps, rng=None,
-                       batch_size=256, max_resample=8, support_max=None):
+                       batch_size=256, max_resample=8, support_max=None,
+                       guards=None):
     """Generate one corruption per input triple. Main entry point.
 
     The name `generate_negatives` is frozen — downstream detector pipelines
@@ -274,6 +428,23 @@ def generate_negatives(triples, payload, id_maps, rng=None,
                    neighbours) become unpickable, so every emitted corruption
                    contradicts the neighbourhood by construction. Degenerate
                    rows lift this mask first (counted in stats).
+    guards       : None (default) = exactly the behaviour every recorded run
+                   had. A dict switches on the EVAL-COLUMN GUARDS:
+                     {"kind": True}    keep only replacements of the same
+                                       kind as the value replaced (CoDEx's
+                                       own criterion; needs types attached,
+                                       see load_checkpoint(types_path=...))
+                     {"support": 0.5}  ban values the graph's own
+                                       regularities predict for the anchor
+                                       (more than half of the entities that
+                                       share one of its values hold this
+                                       one too) -- these were coming out
+                                       labelled false while probably true
+                     {"unique": True}  never emit the same corruption twice
+                                       in one call
+                   A row nothing survives becomes a null corruption. Raise
+                   max_resample (32) with guards on. Guards are for test
+                   columns, not for training negatives.
 
     Returns (corruptions, stats). stats['null_indices'] lists the positions
     whose emitted corruption is the original triple — callers training on
@@ -284,7 +455,8 @@ def generate_negatives(triples, payload, id_maps, rng=None,
 
     if payload.get("arch") == "candidate_v2":
         return _generate_negatives_candidate_v2(triples, payload, id_maps,
-                                                rng, max_resample, support_max)
+                                                rng, max_resample, support_max,
+                                                guards)
 
     raise ValueError(
         "generate_negatives requires a candidate_v2 payload; legacy "
@@ -293,7 +465,7 @@ def generate_negatives(triples, payload, id_maps, rng=None,
 
 
 def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
-                                     max_resample, support_max):
+                                     max_resample, support_max, guards=None):
     """The candidate_v2 decode: score every candidate in the relation's FULL
     type pool per row, scatter those scores into an n_ent-wide vector, then
     run the shared mask ladder (_pick_candidate_index)."""
@@ -308,6 +480,10 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
     true_heads = payload.get("true_heads", {})
     pool_masks = payload["pool_masks"]
     n_ent = payload["n_ent"]
+
+    guards = guards or {}
+    unique = bool(guards.get("unique"))
+    seen_fillers = {}     # (anchor, relation, slot) -> fillers emitted so far
 
     torch_rng = torch.Generator(device=device)
     torch_rng.manual_seed(int(rng.integers(0, 2**31 - 1)))
@@ -325,7 +501,9 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
     # read them to find and replace null corruptions before training.
     stats = {"processed": 0, "used_original": 0, "null_indices": [],
              "resampled": 0, "type_valid": 0, "slot_h": 0, "slot_r": 0,
-             "slot_t": 0, "corroboration_lifted": 0}
+             "slot_t": 0, "corroboration_lifted": 0,
+             # guard stats: stay zero unless generate_negatives got guards
+             "guard_null": 0, "unique_masked": 0}
 
     for row_index, (h, r, t) in enumerate(generator_triples):
         # STEP 2: pick the corrupted slot, 50/50 head or tail. The anchor is
@@ -362,6 +540,22 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
             corroborated_entities_mask(payload, anchor, support_max)
             if support_max is not None else None)
 
+        # GUARDS (None unless generate_negatives got guards): wrong-kind and
+        # graph-predicted candidates, plus every filler already emitted for
+        # this (anchor, relation, slot) when uniqueness is on. A hard ban,
+        # never lifted -- a row nothing survives becomes a null corruption.
+        guard_mask = (build_guard_mask(payload, h, r, t, slot, guards)
+                      if guards else None)
+        if unique:
+            prior = seen_fillers.get((anchor, r, slot))
+            if prior:
+                if guard_mask is None:
+                    guard_mask = torch.zeros(n_ent, dtype=torch.bool,
+                                             device=device)
+                guard_mask[torch.tensor(sorted(prior), dtype=torch.long,
+                                        device=device)] = True
+                stats["unique_masked"] += 1
+
         # STEPS 4-6: mask, pick, check; bounded redraws.
         # emit_* is the triple actually returned; it stays == (h, r, t) if
         # every redraw fails, which is what makes the row a null corruption.
@@ -374,7 +568,7 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
             picked_index, lifted = _pick_candidate_index(
                 full_scores, true_filler, torch_rng, banned=banned,
                 pool_row=pool_row.to(device), other_entity=other_entity,
-                corroboration_mask=corroboration_mask)
+                corroboration_mask=corroboration_mask, guard_mask=guard_mask)
             row_lifted = row_lifted or lifted
             if picked_index < 0:
                 break
@@ -384,6 +578,9 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
                     and proposed_corruption not in real_triple_set):
                 emit_h, emit_r, emit_t = proposed_corruption
                 emitted = True
+                if unique:
+                    seen_fillers.setdefault((anchor, r, slot),
+                                            set()).add(picked_index)
                 if bool(pool_row[picked_index]):
                     stats["type_valid"] += 1
                 break
@@ -392,6 +589,8 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
         if not emitted:
             stats["used_original"] += 1
             stats["null_indices"].append(row_index)
+            if guard_mask is not None:
+                stats["guard_null"] += 1
         if row_lifted:
             stats["corroboration_lifted"] += 1
         stats["slot_h" if slot == 0 else "slot_t"] += 1
