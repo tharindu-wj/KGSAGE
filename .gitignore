@@ -36,3 +36,11 @@ env/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Secrets: inference/explain.py reads GOOGLE_API_KEY from .env. The
+# template .env.example is committed; a filled-in .env never is.
+.env
+
+# The dashboard app dependencies and build output (regenerable)
+dashboard/app/node_modules/
+dashboard/app/dist/

@@ -10,16 +10,16 @@ The current flow, tool by tool:
       architecture, one snapshot per epoch).
   python -m kgsage.cli.knockout_eval
       Snapshot SELECTION by knockout J@10: lower = more anchor-specific.
-  python -m kgsage.cli.gen_corruptions_csv
-      Phase 3 - Corruption Generation: the stage-1 evaluation CSV of
-      corruptions from a promoted generator (feeds 7.3 and 7.4).
-  python -m kgsage.cli.ego_from_csv
-      One ego-graph figure per CSV row (7.4).
-  python -m kgsage.cli.format_for_llm
-      Paste-ready triple blocks, corrupted + control (7.3).
-  python -m kgsage.cli.gen_neighbourhood_context
-      Neighbourhood-context case blocks for the contradiction judgement
-      (7.4 semantic).
+
+Phase 3 - Corruption Generation - and its evaluation now live beside the
+package, in the repository's inference/ and dashboard/ components
+(run as scripts from the repository root):
+  python inference/corrupt.py     a corrupted dataset + the run record
+  python inference/explain.py     the LLM's reasoning, into the record
+  python dashboard/export.py      the case-by-case dashboard
+They replace five tools retired on 10 Oct 2026 (gen_plain_tsv,
+gen_corruptions_csv, ego_from_csv, format_for_llm,
+gen_neighbourhood_context); git history keeps them.
 """
 import sys
 

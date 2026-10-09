@@ -32,9 +32,12 @@ An adversarial generator, trained without a link predictor:
 # From this repo root. Editable, so the checkout stays authoritative.
 pip install -e .
 
-# Optional extra: only kgsage.cli.ego_from_csv needs it.
-pip install -e ".[viz]"
+# Optional extra: only the LLM stage, inference/explain.py, needs it.
+pip install -e ".[inference]"
 ```
+
+The dashboard needs Node.js; `python dashboard/export.py --build` installs
+its packages on first use.
 
 On a cluster, install torch and torch-geometric **first**, matching the node's
 CUDA build. The dependencies here are deliberately unpinned, so pip leaves an
@@ -50,13 +53,23 @@ existing install alone rather than replacing a CUDA wheel with a CPU one.
     corruption_generation.py generation API (no PyG needed)
     gan/                     training stack: encoder, sketches, sampler,
                              generator, both discriminators, train.py
-    cli/                     command-line tools
+    cli/                     command-line tools (snapshot selection)
     preprocessing/           CODE: TSV loaders, dataset registry, converters
+  inference/                 corrupt a dataset with a checkpoint; LLM reasoning
+  dashboard/                 the case-by-case review app (React)
   data/                      DATA: the dataset directories themselves
-  outputs/                   run artifacts: checkpoints, eval output (gitignored)
+  outputs/                   run artifacts: checkpoints, inference runs,
+                             dashboard data (gitignored)
   slurm/                     HPC launchers (see slurm/README.md)
+  CONTRACTS.md               the files between inference/ and dashboard/
+  check_boundaries.py        proves the components stay separate
   smoke_test.py              import + structure check
 ```
+
+`inference/` and `dashboard/` are applications over the package, not part
+of it: `pip install` ships only `kgsage/`, and nothing in `kgsage/` imports
+them. Each has its own README; [CONTRACTS.md](CONTRACTS.md) is the whole
+interface between them.
 
 `preprocessing/` is the code that reads knowledge graphs; `data/` holds the
 graphs. (Before, both were `data/` — hence the split.)
@@ -88,10 +101,21 @@ python -m kgsage.gan.train --data data/FB15K-237 \
 # 2. pick the best snapshot: lowest mean knockout J@10
 python -m kgsage.cli.knockout_eval --ckpt <snapshot>.pt --data data/FB15K-237
 
-# 3. generate corruptions to CSV
-python -m kgsage.cli.gen_corruptions_csv --ckpt <chosen>.pt \
-    --data data/FB15K-237 --split test --per_rel 4 --seed 7
+# 3. corrupt 5% of a dataset: the corrupted triple list + a record of every
+#    corruption with its neighbourhood (outputs/inference/<run>/)
+python inference/corrupt.py --ckpt <chosen>.pt --data codex-s --ratio 0.05 --seed 0
+
+# 4. an LLM judges each corruption against KGSAGE's three goals
+python inference/explain.py --run codex-s_r0.05_s0
+
+# 5. review them, case by case
+python dashboard/export.py --build --single
 ```
+
+Steps 3 to 5 are built and tested on CoDEx-S, the one dataset with the
+definition files (labels, descriptions, kinds) they read; see
+[inference/README.md](inference/README.md) and
+[dashboard/README.md](dashboard/README.md).
 
 Registered datasets can be named instead of pathed: `--data fb15k237` resolves
 through `kgsage/preprocessing/registry.py`.
@@ -111,9 +135,10 @@ detector KGSAGE is tested against — it consumes these checkpoints from
 reference consumer of the contract described below, and a worked example of
 what the other side of that `cp` looks like.
 
-Helpers that read that CSV: `kgsage.cli.ego_from_csv` (ego-graph figures),
-`kgsage.cli.format_for_llm` and `kgsage.cli.gen_neighbourhood_context`
-(paste-ready blocks for LLM evaluation).
+A detector that wants a frozen anomaly column instead of a checkpoint takes
+`outputs/inference/<run>/corruptions.tsv`: three tab-separated ids per line,
+the format KGMVAD's `inject --source frozen` and ADKGD's `--anomaly_file`
+read.
 
 ## Use as a library
 
@@ -222,8 +247,14 @@ always 0 — relations are never corrupted), `corroboration_lifted`.
 generate_negatives(triples, payload, id_maps,
                    rng=np.random.default_rng(7),  # reproducibility
                    max_resample=8,                # redraws before a null
-                   support_max=None)              # corroboration mask: off
+                   support_max=None,              # corroboration mask: off
+                   guards=None,                   # eval-column guards: off
+                   slot=None)                     # head or tail, 50/50
 ```
+
+`slot="head"` or `slot="tail"` corrupts that slot on every row. The 50/50
+coin is drawn either way, so the same seed draws the same sources and the
+same generator noise; only the slot differs.
 
 `support_max` is the hard one. Left at `None` the generator only guarantees
 falseness. Set it to an integer `>= 0` and every candidate the anchor's
@@ -245,8 +276,13 @@ evaluating — that seam is deliberate, and it is why the entry point is named
 Drop `train.txt` / `valid.txt` / `test.txt` (tab-separated
 `head<TAB>relation<TAB>tail`) into `kgsage/data/<NAME>/` and pass that path to
 `--data`. Short names registered in
-[preprocessing/registry.py](preprocessing/registry.py): `fb15k237`, `wn18rr`,
-`yago45`, `fb15k_mini`, `dummy_kg`.
+[preprocessing/registry.py](kgsage/preprocessing/registry.py): `fb15k237`, `wn18rr`,
+`yago45`, `fb15k_mini`, `dummy_kg`, `codex-s`.
+
+`data/codex-s/` also carries the CoDEx release's four definition files
+(entity labels and descriptions, relation labels, entity kinds, kind
+labels). The package never reads them; `inference/` does, and so does the
+generator's kind guard through `--types`.
 
 Registry paths are relative to the directory you run from — the one that
 *contains* `kgsage/`. Datasets are gitignored; see [data/README.md](data/README.md).
