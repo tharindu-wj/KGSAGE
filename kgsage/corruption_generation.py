@@ -19,7 +19,8 @@ The pipeline, one corruption per real triple:
   STEP 1  Translate the caller's integer ids -> strings -> the generator's
           integer ids (the caller and the generator may number the same
           entity differently; strings are the shared language).
-  STEP 2  Pick the slot to corrupt: head or tail, 50/50. The entity that
+  STEP 2  Pick the slot to corrupt: head or tail, 50/50 (or the one the
+          caller forces with `slot=`). The entity that
           keeps its slot is the ANCHOR; the value being replaced is the
           TRUE_FILLER. The relation slot is never corrupted — with head and
           tail fixed there is rarely a coherent alternative relation, so
@@ -406,9 +407,13 @@ def _pick_candidate_index(logits, true_filler_index, torch_rng,
             lifted_corroboration)
 
 
+#: what `slot=` accepts -> the internal slot code (0 = head, 2 = tail)
+_SLOT_CODES = {"head": 0, "tail": 2, 0: 0, 2: 2}
+
+
 def generate_negatives(triples, payload, id_maps, rng=None,
                        batch_size=256, max_resample=8, support_max=None,
-                       guards=None):
+                       guards=None, slot=None):
     """Generate one corruption per input triple. Main entry point.
 
     The name `generate_negatives` is frozen — downstream detector pipelines
@@ -445,6 +450,11 @@ def generate_negatives(triples, payload, id_maps, rng=None,
                    A row nothing survives becomes a null corruption. Raise
                    max_resample (32) with guards on. Guards are for test
                    columns, not for training negatives.
+    slot         : None (default) = head or tail, 50/50 -- every recorded
+                   run. "head" / "tail" (or 0 / 2) corrupts that slot on
+                   every row. The 50/50 coin is drawn either way, so a
+                   forced slot leaves the caller's rng exactly where None
+                   would: same seed, same sources, only the slot differs.
 
     Returns (corruptions, stats). stats['null_indices'] lists the positions
     whose emitted corruption is the original triple — callers training on
@@ -452,11 +462,17 @@ def generate_negatives(triples, payload, id_maps, rng=None,
     """
     if rng is None:
         rng = np.random.default_rng(0)
+    if slot is not None and slot not in _SLOT_CODES:
+        raise ValueError(
+            f"slot={slot!r}: corrupt 'head' or 'tail' (or 0 / 2), or pass "
+            "None for the 50/50 default. The relation slot is never "
+            "corrupted.")
+    forced_slot = None if slot is None else _SLOT_CODES[slot]
 
     if payload.get("arch") == "candidate_v2":
         return _generate_negatives_candidate_v2(triples, payload, id_maps,
                                                 rng, max_resample, support_max,
-                                                guards)
+                                                guards, forced_slot)
 
     raise ValueError(
         "generate_negatives requires a candidate_v2 payload; legacy "
@@ -465,7 +481,8 @@ def generate_negatives(triples, payload, id_maps, rng=None,
 
 
 def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
-                                     max_resample, support_max, guards=None):
+                                     max_resample, support_max, guards=None,
+                                     forced_slot=None):
     """The candidate_v2 decode: score every candidate in the relation's FULL
     type pool per row, scatter those scores into an n_ent-wide vector, then
     run the shared mask ladder (_pick_candidate_index)."""
@@ -508,7 +525,10 @@ def _generate_negatives_candidate_v2(triples, payload, id_maps, rng,
     for row_index, (h, r, t) in enumerate(generator_triples):
         # STEP 2: pick the corrupted slot, 50/50 head or tail. The anchor is
         # whichever entity keeps its slot; the true_filler is what we replace.
-        slot = 2 if rng.random() < 0.5 else 0
+        # The coin is drawn even when the caller forced a slot, so the rng
+        # stream (and every later draw from it) is the same either way.
+        coin_slot = 2 if rng.random() < 0.5 else 0
+        slot = coin_slot if forced_slot is None else forced_slot
         if slot == 0:                                  # corrupt the HEAD
             true_filler, other_entity, anchor = h, t, t
             banned = true_heads.get((r, t))

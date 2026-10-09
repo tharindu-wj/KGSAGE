@@ -21,11 +21,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only kgsage/cli/ego_from_csv.py needs these. A detector integrating KGSAGE
-# through the public API never draws ego graphs, so it can skip them.
-viz = ["networkx", "matplotlib"]
+# Only inference/explain.py needs this (the LLM stage). The package itself,
+# and a detector integrating it through the public API, never do. The old
+# `viz` extra (networkx, matplotlib) went with cli/ego_from_csv.py, retired
+# on 10 Oct 2026 for the dashboard's graph.
+inference = ["google-genai"]
 
 [tool.setuptools.packages.find]
 # Package code lives under kgsage/. Everything beside it -- data/, outputs/,
-# slurm/, smoke_test.py -- is repo furniture and is not installed.
+# inference/, dashboard/, slurm/, smoke_test.py -- is repo furniture and is
+# not installed.
 include = ["kgsage*"]
